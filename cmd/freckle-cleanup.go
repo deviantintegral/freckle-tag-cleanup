@@ -7,6 +7,7 @@ import "log"
 import "net/url"
 import "strconv"
 import "errors"
+import "time"
 
 import (
     "github.com/parnurzeal/gorequest";
@@ -24,7 +25,12 @@ type tag struct {
 // http://developer.letsfreckle.com/v2/authentication/#using-personal-access-tokens
 var token = os.Getenv("FRECKLE_TOKEN")
 
-const threads = 4
+// 7+ threads causes HTTP 429 Too Many Requests.
+const threads = 6
+
+// The number of tags to fetch at once. High numbers result is lower
+// performance.
+const page_count = "400"
 
 func main() {
     thresholdPtr := flag.Int("threshold", 0, "Tags with less than this number of entries will be deleted")
@@ -33,17 +39,22 @@ func main() {
     to_delete := make([]tag, 0);
 
     fmt.Println("Fetching all tags. This may take some time.")
-    tags := getTags()
-    fmt.Println(len(tags), "tags have been fetched.")
+    tagChannel := make(chan tag, threads)
+    go getTags(tagChannel)
 
-    for i := 0; i < len(tags); i++ {
-        if (tags[i].Entries < *thresholdPtr) {
-            to_delete = append(to_delete, tags[i])
+    tagCount := 0
+    for tag := range tagChannel {
+        tagCount++;
+        if (tag.Entries < *thresholdPtr) {
+            to_delete = append(to_delete, tag)
         }
     }
+    fmt.Println(tagCount, "tags have been fetched.")
 
-    fmt.Println(len(to_delete), "tags used less than", *thresholdPtr, "times.")
+    fmt.Println(len(to_delete), "tags used less than", *thresholdPtr, "times eligible to be deleted.")
 
+    // http://developer.letsfreckle.com/v2/tags/#delete-multiple-tags-at-once
+    // requires a tag_ids key in the PUT request.
     type tids struct {
         tag_ids []int
     }
@@ -53,8 +64,10 @@ func main() {
         tag_ids.tag_ids = append(tag_ids.tag_ids, to_delete[i].Id)
     }
 
+    // Actually do the delete!
     if *doDeletePtr {
-        fmt.Println("Doing delete...")
+        fmt.Println("Last chance to cancel. Will do delete in 3 seconds...")
+        time.Sleep(3 * time.Second)
         request := gorequest.New()
         resp, body, err := request.Put("https://api.letsfreckle.com/v2/tags/dele").
           Send(tag_ids).
@@ -76,33 +89,29 @@ func main() {
 }
 
 // Fetch all tags, walking next relations as required.
-func getTags() ([]tag) {
-    // The tags to return
-    var tags []tag
-    tagChannel := make(chan []tag, threads)
-
+func getTags(tagChannel chan tag) {
     pages, _ := getLastTagPage()
     semaphore := make(chan bool, threads)
-    for page := 0; page <= pages; page++ {
+    for page := 1; page <= pages; page++ {
+        fmt.Print(".")
+        uri := "https://api.letsfreckle.com/v2/tags?per_page=" + page_count + "&page=" + strconv.Itoa(page)
         semaphore <- true
-        fmt.Println(page)
-        uri := "https://api.letsfreckle.com/v2/tags?per_page=100&page=" + strconv.Itoa(page)
         go requestTags(uri, tagChannel, semaphore)
-        go func() {
-          tags = append(tags, <-tagChannel...)
-        }()
     }
+    fmt.Println()
 
     // Ensure all requests have finished.
     for i := 0; i < cap(semaphore); i++ {
         semaphore <- true
     }
 
-    return tags
+    // This lets us range over the channel.
+    close(tagChannel)
 }
 
+// Determine what the last page number is so we can thread each request.
 func getLastTagPage() (int, error) {
-    uri := "https://api.letsfreckle.com/v2/tags?per_page=100"
+    uri := "https://api.letsfreckle.com/v2/tags?per_page=" + page_count
     request := gorequest.New()
     // EndStruct() automatically parses the response using the struct format
     // in the header. Cool!
@@ -135,7 +144,7 @@ func getLastTagPage() (int, error) {
 }
 
 // Make the actual request for tags
-func requestTags(uri string, tags chan []tag, semaphore chan bool) {
+func requestTags(uri string, tagChan chan tag, semaphore chan bool) {
     var tagBuffer []tag
 
     defer func() { <- semaphore }()
@@ -155,5 +164,7 @@ func requestTags(uri string, tags chan []tag, semaphore chan bool) {
         log.Fatal(err)
     }
 
-    tags <- tagBuffer
+    for i := 0; i < len(tagBuffer); i++ {
+        tagChan <- tagBuffer[i]
+    }
 }
