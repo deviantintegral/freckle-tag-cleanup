@@ -4,6 +4,9 @@ import "os"
 import "flag"
 import "fmt"
 import "log"
+import "net/url"
+import "strconv"
+import "errors"
 
 import (
     "github.com/parnurzeal/gorequest";
@@ -21,6 +24,8 @@ type tag struct {
 // http://developer.letsfreckle.com/v2/authentication/#using-personal-access-tokens
 var token = os.Getenv("FRECKLE_TOKEN")
 
+const threads = 4
+
 func main() {
     thresholdPtr := flag.Int("threshold", 0, "Tags with less than this number of entries will be deleted")
     doDeletePtr := flag.Bool("do-delete", false, "Actually delete tags")
@@ -29,6 +34,7 @@ func main() {
 
     fmt.Println("Fetching all tags. This may take some time.")
     tags := getTags()
+    fmt.Println(len(tags), "tags have been fetched.")
 
     for i := 0; i < len(tags); i++ {
         if (tags[i].Entries < *thresholdPtr) {
@@ -73,36 +79,36 @@ func main() {
 func getTags() ([]tag) {
     // The tags to return
     var tags []tag
-    // The tags returned from a single request
-    var t []tag
+    tagChannel := make(chan []tag, threads)
 
-    // 25 is the default page limit and is painfully slow.
-    uri := "https://api.letsfreckle.com/v2/tags?per_page=100"
-    for {
-      if uri != "" {
-          t, uri = requestTags(uri)
-          tags = append(tags, t...)
-          fmt.Println("Fetched", len(tags), "tags...")
-      } else {
-          // We reached the end of the list of tags
-          break
-      }
+    pages, _ := getLastTagPage()
+    semaphore := make(chan bool, threads)
+    for page := 0; page <= pages; page++ {
+        semaphore <- true
+        fmt.Println(page)
+        uri := "https://api.letsfreckle.com/v2/tags?per_page=100&page=" + strconv.Itoa(page)
+        go requestTags(uri, tagChannel, semaphore)
+        go func() {
+          tags = append(tags, <-tagChannel...)
+        }()
+    }
+
+    // Ensure all requests have finished.
+    for i := 0; i < cap(semaphore); i++ {
+        semaphore <- true
     }
 
     return tags
 }
 
-// Make the actual request for tags
-func requestTags(uri string) ([]tag, string){
-    var tags []tag
-    var next string
-
+func getLastTagPage() (int, error) {
+    uri := "https://api.letsfreckle.com/v2/tags?per_page=100"
     request := gorequest.New()
     // EndStruct() automatically parses the response using the struct format
     // in the header. Cool!
     resp, _, err := request.Get(uri).
       Set("X-FreckleToken", token).
-      EndStruct(&tags)
+      End()
 
     if err != nil {
         if (resp.StatusCode >= 299) {
@@ -112,13 +118,42 @@ func requestTags(uri string) ([]tag, string){
         log.Fatal(err)
     }
 
-    // Parse out the next URI to fetch tags from.
+    // Parse out the last URI to calculate how many pages there are.
     link := link.ParseResponse(resp)
-    if link["next"] != nil {
-        next = link["next"].URI
-    } else {
-        next = ""
+    if link["last"] != nil {
+        last := link["last"].URI
+        parsed, err := url.ParseRequestURI(last)
+        if err != nil {
+            log.Fatal("Unable to parse", last)
+        }
+        query := parsed.Query()
+        last_page := query.Get("page")
+        return strconv.Atoi(last_page)
     }
 
-    return tags, next
+    return -1, errors.New("There was no last relationship in the response")
+}
+
+// Make the actual request for tags
+func requestTags(uri string, tags chan []tag, semaphore chan bool) {
+    var tagBuffer []tag
+
+    defer func() { <- semaphore }()
+
+    request := gorequest.New()
+    // EndStruct() automatically parses the response using the struct format
+    // in the header. Cool!
+    resp, _, err := request.Get(uri).
+      Set("X-FreckleToken", token).
+      EndStruct(&tagBuffer)
+
+    if err != nil {
+        if (resp.StatusCode >= 299) {
+            log.Fatal("Freckle returned an error: " + resp.Status + " ")
+        }
+
+        log.Fatal(err)
+    }
+
+    tags <- tagBuffer
 }
