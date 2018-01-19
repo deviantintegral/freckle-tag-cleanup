@@ -16,4 +16,12 @@ with the performance of their mobile timer. This tool:
    [Personal Access Token](http://developer.letsfreckle.com/v2/authentication/#using-personal-access-tokens)
    and export it to the `FRECKLE_TOKEN` environment variable.
 1. `go run cmd/freckle-cleanup.go --help`
-1. To actually delete some tags: `go run cmd/freckle-cleanup.go --threshold=0 --do-delete`
+1. To actually delete some tags: `go run cmd/freckle-cleanup.go --threshold=1 --do-delete`
+
+```
+Usage of ./freckle-cleanup:
+  -do-delete
+    	Actually delete tags
+  -threshold int
+    	Tags with less than this number of entries will be deleted
+```
