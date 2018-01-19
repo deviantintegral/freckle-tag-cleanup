@@ -1,6 +1,7 @@
 package main
 
 import "os"
+import "flag"
 import "fmt"
 import "log"
 
@@ -20,24 +21,51 @@ type tag struct {
 // http://developer.letsfreckle.com/v2/authentication/#using-personal-access-tokens
 var token = os.Getenv("FRECKLE_TOKEN")
 
-// Delete tags with this number of entries or less.
-const threshold = 1
-
 func main() {
-    var to_delete = make([]tag, 0);
+    thresholdPtr := flag.Int("threshold", 0, "Tags with less than this number of entries will be deleted")
+    doDeletePtr := flag.Bool("do-delete", false, "Actually delete tags")
+    flag.Parse()
+    to_delete := make([]tag, 0);
 
     fmt.Println("Fetching all tags. This may take some time.")
     tags := getTags()
 
     for i := 0; i < len(tags); i++ {
-        if (tags[i].Entries <= threshold) {
+        if (tags[i].Entries < *thresholdPtr) {
             to_delete = append(to_delete, tags[i])
         }
     }
 
-    fmt.Println(len(to_delete), "tags used less than", threshold, "times.")
+    fmt.Println(len(to_delete), "tags used less than", *thresholdPtr, "times.")
+
+    type tids struct {
+        tag_ids []int
+    }
+    tag_ids := tids{}
     for i := 0; i < len(to_delete); i++ {
         fmt.Println("Delete tag", to_delete[i].Name, "with", to_delete[i].Entries, "usages.")
+        tag_ids.tag_ids = append(tag_ids.tag_ids, to_delete[i].Id)
+    }
+
+    if *doDeletePtr {
+        fmt.Println("Doing delete...")
+        request := gorequest.New()
+        resp, body, err := request.Put("https://api.letsfreckle.com/v2/tags/dele").
+          Send(tag_ids).
+          Set("X-FreckleToken", token).
+          End()
+
+        if err != nil {
+            if (resp.StatusCode >= 299) {
+                log.Fatal("Freckle returned an error: " + resp.Status + " ")
+            }
+
+            log.Fatal(err)
+        }
+
+        fmt.Println(body)
+    } else {
+        fmt.Println("No tags have been deleted.")
     }
 }
 
