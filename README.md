@@ -12,7 +12,8 @@ with the performance of their mobile timer. This tool:
 # To use
 
 1. Clone this repository
-1. Create a Personal Access Token and export it to the `FRECKLE_TOKEN`
-   environment variable.
+1. Create a
+   [Personal Access Token](http://developer.letsfreckle.com/v2/authentication/#using-personal-access-tokens)
+   and export it to the `FRECKLE_TOKEN` environment variable.
 1. `go run cmd/freckle-cleanup.go --help`
 1. To actually delete some tags: `go run cmd/freckle-cleanup.go --threshold=0 --do-delete`
