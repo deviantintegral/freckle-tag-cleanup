@@ -69,6 +69,7 @@ func main() {
         fmt.Println("Last chance to cancel. Will do delete in 3 seconds...")
         time.Sleep(3 * time.Second)
         request := gorequest.New()
+        // @todo Correct this when I'm ready to test live!
         resp, body, err := request.Put("https://api.letsfreckle.com/v2/tags/dele").
           Send(tag_ids).
           Set("X-FreckleToken", token).
